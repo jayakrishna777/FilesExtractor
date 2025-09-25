@@ -9,5 +9,16 @@ class FeedGuideNavigator(BaseTool):
     download_dir: str = "./downloads"
 
     def _run(self, feed_guide: Dict[str, Any]) -> Dict[str, Any]:
+        # 👇 Normalize CrewAI's stringified JSON input
+        
+        if isinstance(feed_guide, str):
+            import json
+            try:
+                feed_guide = json.loads(feed_guide)
+            except Exception:
+                return {"error": "Invalid feed_guide format"}
+
         runner = FeedGuideRunner(download_dir=self.download_dir, headless=True, reuse_browser=False)
-        return runner.run(feed_guide)
+        res = runner.run(feed_guide)
+        print("FeedGuideNavigator result:", res)
+        return res

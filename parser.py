@@ -219,13 +219,13 @@ class FeedGuideRunner:
                                     print("✅ File downloaded:",  download.path())
 
                                    
-                                    # suggested = download.suggested_filename or step.get("save_as") or "download.bin"
-                                    # save_as = step.get("save_as", suggested)
-                                    # dest = os.path.join(self.download_dir, save_as)
-                                    # download.save_as(dest)
-                                    # step_result["status"] = "ok"
-                                    # step_result["file"] = dest
-                                    # results["downloads"].append(dest)
+                                    suggested = download.suggested_filename or step.get("save_as") or "download.bin"
+                                    save_as = step.get("save_as", suggested)
+                                    dest = os.path.join(self.download_dir, save_as)
+                                    download.save_as(dest)
+                                    step_result["status"] = "ok"
+                                    step_result["file"] = dest
+                                    results["downloads"].append(dest)
                                 except PlaywrightTimeoutError as e:
                                     step_result["status"] = "error"
                                     step_result["error"] = f"download timeout: {str(e)}"

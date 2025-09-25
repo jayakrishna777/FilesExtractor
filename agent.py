@@ -12,7 +12,7 @@ data_extractor_agent = Agent(
     goal="Extract data from websites as per the provided feed guide and save the files locally.",
     backstory="An agent that uses a feed guide to navigate websites and download files.",
     tools=[FeedGuideNavigator()],
-    llm=openai_llm
+    # llm=openai_llm
 )
 
 philly_feed = {
@@ -27,7 +27,7 @@ philly_feed = {
 }
 
 task=Task(
-    description="Call the feed_guide_navigator tool with the provided feed_guide to download the files.",
+    description="Call the feed_guide_navigator tool using the variable {feed_guide}.",
     expected_output="A summary of the download result and the path to the downloaded file(s).",  
     agent=data_extractor_agent
 )
@@ -35,5 +35,5 @@ task=Task(
 
 
 crew = Crew(agents=[data_extractor_agent], tasks=[task],verbose=True)
-result= crew.kickoff(inputs=philly_feed)
+result= crew.kickoff(inputs={"feed_guide": philly_feed})
 print("Final Result:", result)
