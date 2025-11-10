@@ -1,0 +1,221 @@
+import os
+from crewai import Agent, Task, Crew , LLM ,Process
+from crewai_tools import CodeInterpreterTool
+from crewai_tools import FileWriterTool
+# from crewai_tools import FileReaderTool
+from crewai.tools import tool
+import subprocess
+import sys
+import json
+import textwrap
+import time
+import pandas as pd
+import base64
+from dotenv import load_dotenv
+load_dotenv()
+
+api_key=os.getenv("OPENAI_API_KEY")
+print(f"API Key: {api_key}")
+openai_llm=LLM(model="gpt-4.1", api_key=os.getenv("OPENAI_API_KEY"))
+ 
+gemini_api_key = os.getenv("GOOGLE_API_KEY")
+
+# Use Gemini 2.5 Pro Experimental modelvenv
+gemini_llm = LLM(
+    provider='google',
+    model='gemini/gemini-2.5-pro',
+    api_key=gemini_api_key,
+    temperature=0.5  # Lower temperature for more consistent results.
+)
+ 
+SOURCE_PATH = "sh_ipc_03_25.xlsx"
+MAP_PATH = "AR-CPI_Map.xlsx"
+EXPECTED_PATH = "output.json"
+
+# Read Excel files
+source_df = pd.read_excel(SOURCE_PATH)
+map_df = pd.read_excel(MAP_PATH)
+
+# ✅ Read JSON file properly
+with open(EXPECTED_PATH, "r", encoding="utf-8") as f:
+    expected_data = json.load(f)
+
+# Convert all datasets to dictionary format (for LLM input or debugging)
+source_sample = source_df.to_dict(orient="records")
+map_sample = map_df.to_dict(orient="records")
+
+# If the JSON data is a list of objects, no need to convert again
+# But if it’s a dict and you want list-like view:
+if isinstance(expected_data, dict):
+    expected_sample = [expected_data]
+else:
+    expected_sample = expected_data
+
+
+
+
+@tool("execute_code_tool")
+def run_script(script_path="parser.py"):
+    """Run parser.py and return stdout/stderr and returncode."""
+    try:
+        proc = subprocess.run(
+            [sys.executable, script_path],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        return {"returncode": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr}
+    except Exception as e:
+        return {"returncode": 1, "stdout": "", "stderr": str(e)}
+
+# Define your agents with roles, goals, tools, and additional attributes
+script_generator = Agent(
+ role="Python ETL Script Developer",
+ goal=(
+ "Generate production-ready Python scripts that read source and mapping files, "
+ "auto-detect date headers, perform data transformations, and output results to Excel. "
+ "Save the complete script as parser.py using the FileWriterTool."
+ ),
+ backstory=(
+ "You are a senior Python developer with 10+ years of experience building robust ETL pipelines. "
+ "You specialize in pandas-based data processing, excel file handling, and writing clean, "
+ "well-documented code with comprehensive error handling and logging. You write production-ready "
+ "scripts that are maintainable and include clear debug output for troubleshooting."
+ ),
+ verbose=True,
+ tools=[FileWriterTool()],
+ allow_delegation=False,
+ allow_code_execution=False, # Added for code generation capability
+ llm=openai_llm
+)
+
+
+
+def build_generator_task_description(source_sample, map_sample, expected_sample):
+    return f"""
+You are given three files:
+
+1. A **data file** (`.xls` or `.xlsx`) containing raw time series data.
+2. A **mapping file** (`.xlsx`) that defines how fields from the data file map to their respective **SERIES CODES**, data types, and transformation rules (including date formats).
+3. An **expected output file** in **JSON format**, showing the desired structure and sample content of the final parsed output.
+
+Your task is to generate a **Python script** that:
+
+* Reads the **data file**, **mapping file**, and **expected JSON file**.
+* Dynamically extracts only the **relevant time series data** from the data file based on mappings.
+* Maps each field correctly to its **SERIES CODE** as defined in the mapping file.
+* Parses and standardizes **dates** into the `YYYY-MM-DD` format (or as specified in the mapping file).
+* Produces the **final output in JSON format**, following the same structure as the **expected JSON file**.
+* Ensures the script is **generic and reusable** — it should work for new data and mapping files without code modification (only file paths should change).
+* Includes **clear comments** explaining the logic for reading, mapping, transforming, and generating the output JSON.
+* Understand the source data clearly , it will have data in non-english column names , dates or month names.
+SOURCE_PATH = "sh_ipc_03_25.xlsx"
+MAP_PATH = "AR-CPI_Map.xlsx"
+EXPECTED_PATH = "output.json"
+**Output Requirement:**
+Return a **complete, ready-to-run Python script** that performs all the above tasks and produces a JSON file as the final output, consistent with the provided expected JSON format.
+
+
+
+SOURCE SAMPLE:
+{source_sample}
+
+MAP SAMPLE:
+{map_sample}
+
+EXPECTED OUTPUT SAMPLE:
+{expected_sample}
+"""
+
+gen_desc = build_generator_task_description(source_sample, map_sample, expected_sample)
+task_generate = Task(description=gen_desc, agent=script_generator, expected_output="script in fenced block + json base64")
+
+# Create executor agent with CodeInterpreterTool
+executor_agent = Agent(
+ role="Python Script Executor",
+ goal="Execute Python scripts and capture their output, errors, and execution status",
+ backstory="You are an expert at running Python scripts in secure environments and providing detailed execution reports with stdout, stderr, and exception traces.",
+#  allow_code_execution=True,
+#  code_execution_mode="safe", # Uses Docker for security
+ verbose=True,
+ llm=openai_llm,
+ tools=[run_script]
+)
+
+
+
+def validate_output(task_output):
+    #  """Validate the generated Excel file"""
+    try:
+        df = pd.read_excel("final_output.xlsx")
+        
+        # Check if file is empty
+        if df.empty:
+            return (False, "Output file is empty")
+        
+        # Check required columns
+        required_cols = ["date", "Time series code"]
+        missing = [col for col in required_cols if col not in df.columns]
+        
+        if missing:
+            return (False, f"Missing columns: {missing}")
+        
+        return (True, task_output)
+    except Exception as e:
+        return (False, f"Validation error: {str(e)}")
+
+
+
+execute_task = Task(
+ description=(
+ "Execute the parser.py script located in the current working directory. "
+ "Capture and report all output including stdout, stderr, and any exceptions. "
+ "Provide execution status (success/failure) with complete diagnostic information."
+ ),
+ expected_output=(
+ "Detailed execution report with:\n"
+ "- Status: SUCCESS or FAILED\n"
+ "- Return code\n"
+ "- Standard output (stdout)\n"
+ "- Error output (stderr)\n"
+ "Include the complete error messages for debugging."
+ ),
+ agent=executor_agent,
+ context=[task_generate] # Gets both script and errors
+)
+
+fix_task = Task(
+ description="""
+ Review the original script and execution errors.
+ Analyze the source files:
+ - Source file: {source_sample}
+ - Map file: {map_sample}
+ - Expected output: {expected_sample}
+
+ Update parser.py with the corrected script that produces the exact expected output.
+ """,
+ expected_output="Fixed, accurate Python script",
+ agent=script_generator,
+ context=[task_generate,execute_task] # Gets both script and errors
+)
+
+
+
+# Instantiate your crew with a sequential process
+crew = Crew(
+    agents=[script_generator , executor_agent],
+    tasks=[task_generate, execute_task,fix_task],
+    process = Process.sequential,
+    verbose=True,
+    # memory=True,
+    # planning=True  # Enable planning feature for the crew
+)
+
+# Get your crew to work!
+result = crew.kickoff()
+
+print("######################")
+print(result)
+
+
+
